@@ -54,12 +54,12 @@ if uploaded_file is not None:
     
     if missing_cols:
         st.error(f"数据集中缺少以下必要字段: {missing_cols}")
-        st.info("期待的表头包含: PO Number, Order Date, Merchant SKU, Vendor SKU, OMS ID, 产品名称, 品牌, 产品SKU, 运营, Description, Unit Cost, Unit Cost Currency, Quantity, Total Cost")
+        st.info("标准的表头应为: PO Number, Order Date, Merchant SKU, Vendor SKU, OMS ID, 产品名称, 产品SKU, Description, Unit Cost, Unit Cost Currency, Quantity, Total Cost")
         st.stop()
 
     # 2. 数据清洗
     df['Order Date'] = pd.to_datetime(df['Order Date'], errors='coerce')
-    df = df.dropna(subset=['Order Date'])  # 删除无效日期
+    df = df.dropna(subset=['Order Date'])  # 删除无有效日期的行
     df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0)
     
     if 'Unit Cost' in df.columns:
@@ -132,10 +132,10 @@ if uploaded_file is not None:
         st.subheader("📋 SVP 申报参数自动生成")
         st.caption(f"当前算法配置：假定上传数据（1–8月）占全年总销量的 **{seasonality_ratio*100:.0f}%**。公式：`Annual = 历史出货量 / {seasonality_ratio:.2f}`，`Weekly = Annual / 52`。")
 
-        # 1. 容错清洗，防止 NaN 导致分组失败
+        # 1. 容错清洗，匹配你的新表头
         df_svp = df.copy()
         
-        potential_cols = ['OMS ID', 'Merchant SKU', 'Vendor SKU', '产品名称', '品牌', '运营']
+        potential_cols = ['OMS ID', 'Merchant SKU', 'Vendor SKU', '产品SKU', '产品名称', 'Description']
         group_cols = [c for c in potential_cols if c in df_svp.columns]
 
         if not group_cols:
