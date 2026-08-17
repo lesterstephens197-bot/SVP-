@@ -48,18 +48,25 @@ if uploaded_file is not None:
         st.error(f"读取文件失败，请检查文件格式: {e}")
         st.stop()
 
-    # 检查核心列名
-    required_cols = ['Order Date', 'Quantity', 'OMS ID']
+    # 检查核心列名（兼容不同拼写与常见表头）
+    required_cols = ['Order Date', 'Quantity']
     missing_cols = [col for col in required_cols if col not in df.columns]
     
-    if missing_cols:
-        st.error(f"数据集中缺少以下必要字段: {missing_cols}")
-        st.info("标准的表头应为: PO Number, Order Date, Merchant SKU, Vendor SKU, OMS ID, 产品名称, 产品SKU, Description, Unit Cost, Unit Cost Currency, Quantity, Total Cost")
+    # 动态确定唯一识别 SKU 的列
+    sku_primary_col = None
+    for candidate in ['产品SKU', 'Merchant SKU', 'Vendor SKU', 'OMS ID']:
+        if candidate in df.columns:
+            sku_primary_col = candidate
+            break
+
+    if missing_cols or not sku_primary_col:
+        st.error(f"数据集中缺少必要字段！缺少核心列: {missing_cols}，或未找到可标识的 SKU 列（如产品SKU/Merchant SKU/Vendor SKU）。")
+        st.info("当前支持的标准表头包含: PO Number, Order Date, Merchant SKU, Vendor SKU, 产品名称, 产品SKU, Description, Unit Cost, Unit Cost Currency, Quantity, Total Cost")
         st.stop()
 
     # 2. 数据清洗
     df['Order Date'] = pd.to_datetime(df['Order Date'], errors='coerce')
-    df = df.dropna(subset=['Order Date'])  # 删除无有效日期的行
+    df = df.dropna(subset=['Order Date'])  # 删除无效日期
     df['Quantity'] = pd.to_numeric(df['Quantity'], errors='coerce').fillna(0)
     
     if 'Unit Cost' in df.columns:
@@ -74,12 +81,12 @@ if uploaded_file is not None:
     # 顶部 KPI 指标
     total_units = df['Quantity'].sum()
     total_sales = df['Total Cost'].sum() if 'Total Cost' in df.columns else 0
-    total_skus = df['OMS ID'].nunique()
+    total_skus = df[sku_primary_col].nunique()
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("总出货件数 (Units)", f"{int(total_units):,}")
     col2.metric("总出货金额 ($)", f"${total_sales:,.2f}")
-    col3.metric("在售 OMS ID 数量", f"{total_skus} 个")
+    col3.metric(f"在售 {sku_primary_col} 数量", f"{total_skus} 个")
     col4.metric("覆盖时间跨度", f"{df['YearMonth'].min()} ~ {df['YearMonth'].max()}")
 
     st.markdown("---")
@@ -106,22 +113,21 @@ if uploaded_file is not None:
         fig_monthly.update_traces(textposition='outside')
         st.plotly_chart(fig_monthly, use_container_width=True)
 
-        st.subheader("2. Top SKU / OMS ID 销售表现")
-        sku_col = 'OMS ID'
-        name_col = '产品名称' if '产品名称' in df.columns else ('Merchant SKU' if 'Merchant SKU' in df.columns else 'OMS ID')
+        st.subheader(f"2. Top {sku_primary_col} 销售表现")
+        name_col = '产品名称' if '产品名称' in df.columns else sku_primary_col
         
-        top_skus = df.groupby([sku_col, name_col]).agg(
+        top_skus = df.groupby([sku_primary_col, name_col]).agg(
             Total_Units=('Quantity', 'sum')
         ).reset_index().sort_values(by='Total_Units', ascending=False)
 
         fig_top = px.bar(
             top_skus.head(15),
             x='Total_Units',
-            y=sku_col,
+            y=sku_primary_col,
             orientation='h',
             hover_data=[name_col],
-            title="Top 15 销量最高的 OMS ID",
-            labels={'Total_Units': '出货件数', 'OMS ID': 'OMS ID'},
+            title=f"Top 15 销量最高的 {sku_primary_col}",
+            labels={'Total_Units': '出货件数', sku_primary_col: sku_primary_col},
             color='Total_Units',
             color_continuous_scale='Oranges'
         )
@@ -132,16 +138,15 @@ if uploaded_file is not None:
         st.subheader("📋 SVP 申报参数自动生成")
         st.caption(f"当前算法配置：假定上传数据（1–8月）占全年总销量的 **{seasonality_ratio*100:.0f}%**。公式：`Annual = 历史出货量 / {seasonality_ratio:.2f}`，`Weekly = Annual / 52`。")
 
-        # 1. 容错清洗，匹配你的新表头
+        # 1. 根据新的表头筛选需要展示和分组的列
         df_svp = df.copy()
-        
-        potential_cols = ['OMS ID', 'Merchant SKU', 'Vendor SKU', '产品SKU', '产品名称', 'Description']
+        potential_cols = ['产品SKU', 'Merchant SKU', 'Vendor SKU', '产品名称', 'Description']
         group_cols = [c for c in potential_cols if c in df_svp.columns]
 
         if not group_cols:
-            st.error("表格中未找到可用于分组的 OMS ID 或 SKU 列！")
-            st.stop()
+            group_cols = [sku_primary_col]
 
+        # 填充空值，避免 NaN 导致分组行丢失
         for col in group_cols:
             df_svp[col] = df_svp[col].fillna("-").astype(str)
 
@@ -189,11 +194,11 @@ if uploaded_file is not None:
 
     with tab3:
         st.subheader("📄 过滤与明细查询")
-        selected_sku = st.multiselect("筛选 OMS ID", options=df['OMS ID'].unique())
+        selected_sku = st.multiselect(f"筛选 {sku_primary_col}", options=df[sku_primary_col].unique())
         
         filtered_df = df.copy()
         if selected_sku:
-            filtered_df = filtered_df[filtered_df['OMS ID'].isin(selected_sku)]
+            filtered_df = filtered_df[filtered_df[sku_primary_col].isin(selected_sku)]
 
         st.dataframe(filtered_df, use_container_width=True)
 
