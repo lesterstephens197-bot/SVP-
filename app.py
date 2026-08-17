@@ -48,24 +48,26 @@ if uploaded_file is not None:
         st.error(f"读取文件失败，请检查文件格式: {e}")
         st.stop()
 
-    # 检查核心必要列名
+    # 清理列名空格
+    df.columns = df.columns.str.strip()
+
+    # 检查核心列名
     required_cols = ['Order Date', 'Quantity']
     missing_cols = [col for col in required_cols if col not in df.columns]
     
     if missing_cols:
         st.error(f"数据集中缺少以下必要字段: {missing_cols}")
-        st.info("期待的表头包含: PO Number, Order Date, Merchant SKU, Vendor SKU, 产品名称, Description, Unit Cost, Unit Cost Currency, Quantity, Total Cost")
+        st.info("期待的表头包含: PO Number, Order Date, Merchant SKU, Vendor SKU, 产品名称, Unit Cost, Unit Cost Currency, Quantity, Total Cost")
         st.stop()
 
-    # 确定主要的 SKU 识别列
-    sku_col = None
-    for candidate in ['Merchant SKU', 'Vendor SKU']:
-        if candidate in df.columns:
-            sku_col = candidate
-            break
-    
-    if sku_col is None:
-        st.error("表格中未找到 'Merchant SKU' 或 'Vendor SKU' 字段！")
+    # 确定 SKU 主键列 (优先用 Merchant SKU，没有则用 Vendor SKU)
+    sku_main_col = None
+    if 'Merchant SKU' in df.columns:
+        sku_main_col = 'Merchant SKU'
+    elif 'Vendor SKU' in df.columns:
+        sku_main_col = 'Vendor SKU'
+    else:
+        st.error("表格中未找到 'Merchant SKU' 或 'Vendor SKU' 列！")
         st.stop()
 
     # 2. 数据清洗
@@ -85,12 +87,12 @@ if uploaded_file is not None:
     # 顶部 KPI 指标
     total_units = df['Quantity'].sum()
     total_sales = df['Total Cost'].sum() if 'Total Cost' in df.columns else 0
-    total_skus = df[sku_col].nunique()
+    total_skus = df[sku_main_col].dropna().nunique()
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("总出货件数 (Units)", f"{int(total_units):,}")
     col2.metric("总出货金额 ($)", f"${total_sales:,.2f}")
-    col3.metric(f"在售 {sku_col} 数量", f"{total_skus} 个")
+    col3.metric("在售 SKU 数量", f"{total_skus} 个")
     col4.metric("覆盖时间跨度", f"{df['YearMonth'].min()} ~ {df['YearMonth'].max()}")
 
     st.markdown("---")
@@ -117,21 +119,20 @@ if uploaded_file is not None:
         fig_monthly.update_traces(textposition='outside')
         st.plotly_chart(fig_monthly, use_container_width=True)
 
-        st.subheader(f"2. Top {sku_col} 销售表现")
-        name_col = '产品名称' if '产品名称' in df.columns else ('Description' if 'Description' in df.columns else sku_col)
+        st.subheader(f"2. Top {sku_main_col} 销售表现")
+        name_col = '产品名称' if '产品名称' in df.columns else sku_main_col
         
-        top_skus = df.groupby([sku_col, name_col], dropna=False).agg(
+        top_skus = df.groupby([sku_main_col]).agg(
             Total_Units=('Quantity', 'sum')
         ).reset_index().sort_values(by='Total_Units', ascending=False)
 
         fig_top = px.bar(
             top_skus.head(15),
             x='Total_Units',
-            y=sku_col,
+            y=sku_main_col,
             orientation='h',
-            hover_data=[name_col],
-            title=f"Top 15 销量最高的 {sku_col}",
-            labels={'Total_Units': '出货件数', sku_col: sku_col},
+            title=f"Top 15 销量最高的 {sku_main_col}",
+            labels={'Total_Units': '出货件数', sku_main_col: sku_main_col},
             color='Total_Units',
             color_continuous_scale='Oranges'
         )
@@ -145,7 +146,7 @@ if uploaded_file is not None:
         # 1. 容错清洗，防止 NaN 导致分组失败
         df_svp = df.copy()
         
-        potential_cols = ['Merchant SKU', 'Vendor SKU', '产品名称', 'Description']
+        potential_cols = ['Merchant SKU', 'Vendor SKU', '产品名称']
         group_cols = [c for c in potential_cols if c in df_svp.columns]
 
         for col in group_cols:
@@ -195,11 +196,11 @@ if uploaded_file is not None:
 
     with tab3:
         st.subheader("📄 过滤与明细查询")
-        selected_sku = st.multiselect(f"筛选 {sku_col}", options=df[sku_col].astype(str).unique())
+        selected_sku = st.multiselect(f"筛选 {sku_main_col}", options=df[sku_main_col].unique())
         
         filtered_df = df.copy()
         if selected_sku:
-            filtered_df = filtered_df[filtered_df[sku_col].astype(str).isin(selected_sku)]
+            filtered_df = filtered_df[filtered_df[sku_main_col].isin(selected_sku)]
 
         st.dataframe(filtered_df, use_container_width=True)
 
